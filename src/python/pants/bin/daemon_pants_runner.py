@@ -17,7 +17,7 @@ from setproctitle import setproctitle as set_process_title
 from pants.base.exiter import Exiter
 from pants.bin.local_pants_runner import LocalPantsRunner
 from pants.init.util import clean_global_runtime_state
-from pants.java.nailgun_io import NailgunStreamWriter
+from pants.java.nailgun_io import NailgunStreamStdinReader, NailgunStreamWriter
 from pants.java.nailgun_protocol import ChunkType, NailgunProtocol
 from pants.pantsd.process_manager import ProcessManager
 from pants.util.contextutil import HardSystemExit, stdio_as
@@ -99,10 +99,10 @@ class DaemonPantsRunner(ProcessManager):
     # Construct StreamWriters for stdout, stderr.
     stdout = NailgunStreamWriter(sock, ChunkType.STDOUT, isatty=stdout_isatty),
     stderr = NailgunStreamWriter(sock, ChunkType.STDERR, isatty=stderr_isatty)
-    stdin = ...
+    stdin_reader = NailgunStreamStdinReader(sock)
 
     # Launch the stdin StreamReader and redirect stdio.
-    with stdin.running():
+    with stdin_reader.running() as stdin:
       with stdio_as(stdout=stdout, stderr=stderr, stdin=stdin):
         yield
 

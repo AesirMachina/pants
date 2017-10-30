@@ -94,20 +94,17 @@ class DaemonPantsRunner(ProcessManager):
   def _nailgunned_stdio(self, sock):
     """Redirects stdio to the connected socket speaking the nailgun protocol."""
     # Determine output tty capabilities from the environment.
-    _, stdout_isatty, stderr_isatty = NailgunProtocol.isatty_from_env(self._env)
-
-    # TODO(kwlzn): Implement remote input reading and fix the non-fork()-safe sys.stdin reference
-    # in NailgunClient to enable support for interactive goals like `repl` etc.
+    stdin_isatty, stdout_isatty, stderr_isatty = NailgunProtocol.isatty_from_env(self._env)
 
     # Construct StreamWriters for stdout, stderr.
-    streams = (
-      NailgunStreamWriter(sock, ChunkType.STDOUT, isatty=stdout_isatty),
-      NailgunStreamWriter(sock, ChunkType.STDERR, isatty=stderr_isatty)
-    )
+    stdout = NailgunStreamWriter(sock, ChunkType.STDOUT, isatty=stdout_isatty),
+    stderr = NailgunStreamWriter(sock, ChunkType.STDERR, isatty=stderr_isatty)
+    stdin = ...
 
     # Launch the stdin StreamReader and redirect stdio.
-    with stdio_as(*streams):
-      yield
+    with stdin.running():
+      with stdio_as(stdout=stdout, stderr=stderr, stdin=stdin):
+        yield
 
   def _setup_sigint_handler(self):
     """Sets up a control-c signal handler for the daemon runner context."""

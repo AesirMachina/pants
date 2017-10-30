@@ -16,8 +16,8 @@ from contextlib import contextmanager
 from pants.java.nailgun_protocol import ChunkType, NailgunProtocol
 
 
-class NailgunStreamReader(threading.Thread):
-  """Reads input from stdin and emits Nailgun 'stdin' chunks over a socket."""
+class NailgunStreamStdinWriter(threading.Thread):
+  """Reads input from stdin and writes Nailgun 'stdin' chunks on a socket."""
 
   SELECT_TIMEOUT = 1
 
@@ -28,7 +28,7 @@ class NailgunStreamReader(threading.Thread):
     :param int buf_size: the buffer size for reads from the file descriptor.
     :param int select_timeout: the timeout (in seconds) for select.select() calls against the fd.
     """
-    super(NailgunStreamReader, self).__init__()
+    super(NailgunStreamStdinWriter, self).__init__()
     self.daemon = True
     self._stdin = in_fd
     self._socket = sock

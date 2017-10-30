@@ -97,7 +97,7 @@ class DaemonPantsRunner(ProcessManager):
     stdin_isatty, stdout_isatty, stderr_isatty = NailgunProtocol.isatty_from_env(self._env)
 
     # Construct StreamWriters for stdout, stderr.
-    stdout = NailgunStreamWriter(sock, ChunkType.STDOUT, isatty=stdout_isatty),
+    stdout = NailgunStreamWriter(sock, ChunkType.STDOUT, isatty=stdout_isatty)
     stderr = NailgunStreamWriter(sock, ChunkType.STDERR, isatty=stderr_isatty)
     stdin_reader = NailgunStreamStdinReader(sock)
 

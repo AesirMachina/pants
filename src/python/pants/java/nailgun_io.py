@@ -36,10 +36,11 @@ class NailgunStreamStdinReader(threading.Thread):
 
   @contextmanager
   def running(self):
-    in_fd, self._out = os.pipe()
+    in_fd, out_fd = os.pipe()
+    self._out = os.fdopen(out_fd, 'w')
     self.start()
     try:
-      yield in_fd
+      yield os.fdopen(in_fd, 'r')
     finally:
       self._try_close()
 

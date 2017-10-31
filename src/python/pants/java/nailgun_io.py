@@ -52,37 +52,44 @@ class NailgunStreamStdinReader(threading.Thread):
 
   def run(self):
     for chunk_type, payload in NailgunProtocol.iter_chunks(self._socket, return_bytes=True):
-      # TODO: Read chunks. Expecting only STDIN, STDIN_EOF, and maybe EXIT.
+      # TODO: Read chunks. Expecting only STDIN and STDIN_EOF.
       if chunk_type == ChunkType.STDIN:
         self._write_handle.write(payload)
       elif chunk_type == ChunkType.STDIN_EOF:
         self._write_handle.close()
-      elif chunk_type == ChunkType.EXIT:
-        break
       else:
         self._try_close()
         # TODO: Will kill the thread, but may not be handled in a useful way
         raise Exception('received unexpected chunk {} -> {}: closing.'.format(chunk_type, payload))
 
 
-class NailgunStreamStdinWriter(threading.Thread):
-  """Reads input from stdin and writes Nailgun 'stdin' chunks on a socket."""
+class NailgunStreamWriter(threading.Thread):
+  """Reads input from an input fd and writes Nailgun chunks on a socket.
+
+  Should generally be managed with the `open` classmethod contextmanager, which will create
+  a pipe and provide its writing end to the caller.
+  """
 
   SELECT_TIMEOUT = 1
 
-  def __init__(self, in_fd, sock, buf_size=io.DEFAULT_BUFFER_SIZE, select_timeout=SELECT_TIMEOUT):
+  def __init__(self, in_file, sock, chunk_type, chunk_eof_type, buf_size=None, select_timeout=None):
     """
-    :param file in_fd: the input file descriptor (e.g. sys.stdin) to read from.
+    :param file in_file: the input file-like to read from.
     :param socket sock: the socket to emit nailgun protocol chunks over.
+    :param tuple chunk_and_eof_types: A tuple of two ChunkType instances: the first for a buffer
+      holding data, and the second for a chunk representing EOF. If the second ChunkType is None,
+      EOF will not be treated specially.
     :param int buf_size: the buffer size for reads from the file descriptor.
     :param int select_timeout: the timeout (in seconds) for select.select() calls against the fd.
     """
-    super(NailgunStreamStdinWriter, self).__init__()
+    super(NailgunStreamWriter, self).__init__()
     self.daemon = True
-    self._stdin = in_fd
+    self._in_file = in_file
     self._socket = sock
-    self._buf_size = buf_size
-    self._select_timeout = select_timeout
+    self._buf_size = buf_size or io.DEFAULT_BUFFER_SIZE
+    self._chunk_type = chunk_type
+    self._chunk_eof_type = chunk_eof_type
+    self._select_timeout = select_timeout or self.SELECT_TIMEOUT
     # N.B. This Event is used as nothing more than a convenient atomic flag - nothing waits on it.
     self._stopped = threading.Event()
 
@@ -95,79 +102,44 @@ class NailgunStreamStdinWriter(threading.Thread):
     """Stops the instance."""
     self._stopped.set()
 
+  @classmethod
+  @contextmanager
+  def open(cls, sock, chunk_type, chunk_eof_type, buf_size=None, select_timeout=None):
+    """Yields the write side of a pipe that will copy appropriately chunked values to the socket."""
+    r_fd, w_fd = os.pipe()
+    read_handle = os.fdopen(r_fd, 'r')
+    write_handle = os.fdopen(w_fd, 'w')
+
+    writer = NailgunStreamWriter(read_handle, sock, chunk_type, chunk_eof_type,
+                                 buf_size=buf_size, select_timeout=select_timeout)
+    with writer.running():
+      yield write_handle
+
   @contextmanager
   def running(self):
     self.start()
-    yield
-    self.stop()
+    try:
+      yield
+    finally:
+      self.stop()
 
   def run(self):
     while not self.is_stopped:
-      readable, _, errored = select.select([self._stdin], [], [self._stdin], self._select_timeout)
+      readable, _, errored = select.select([self._in_file], [], [self._in_file], self._select_timeout)
 
-      if self._stdin in errored:
+      if self._in_file in errored:
         self.stop()
         return
 
-      if not self.is_stopped and self._stdin in readable:
-        data = os.read(self._stdin.fileno(), self._buf_size)
+      if not self.is_stopped and self._in_file in readable:
+        data = os.read(self._in_file.fileno(), self._buf_size)
 
         if not self.is_stopped:
           if data:
-            NailgunProtocol.write_chunk(self._socket, ChunkType.STDIN, data)
+            NailgunProtocol.write_chunk(self._socket, self._chunk_type, data)
           else:
-            NailgunProtocol.write_chunk(self._socket, ChunkType.STDIN_EOF)
-            try:
-              self._socket.shutdown(socket.SHUT_WR)  # Shutdown socket sends.
-            except socket.error:  # Can happen if response is quick.
-              pass
-            finally:
-              self.stop()
-
-
-class NailgunStreamsWriter(object):
-  """A sys.{stdout,stderr} replacement that writes output to a socket using the nailgun protocol."""
-
-  def __init__(self, sock, chunk_type):
-    """
-    :param socket sock: A connected socket capable of speaking the nailgun protocol.
-    :param str chunk_type: A ChunkType constant representing the nailgun protocol chunk type.
-    """
-    self._socket = sock
-    self._chunk_type = chunk_type
-
-  @contextmanager
-  def running(self):
-    r_fd, w_fd = os.pipe()
-    self._read_handle = os.fdopen(r_fd, 'r')
-    self.start()
-    try:
-      yield os.fdopen(w_fd, 'w')
-    finally:
-      self._try_close()
-
-  def _try_close(self):
-    try:
-      self._socket.close()
-    except:
-      pass
-
-  def run(self):
-    while True:
-      readable, _, errored = select.select([self._stdin], [], [self._stdin], self._select_timeout)
-
-      if self._stdin in errored:
-        self.stop()
-        return
-
-      if not self.is_stopped and self._stdin in readable:
-        data = os.read(self._stdin.fileno(), self._buf_size)
-
-        if not self.is_stopped:
-          if data:
-            NailgunProtocol.write_chunk(self._socket, ChunkType.STDIN, data)
-          else:
-            NailgunProtocol.write_chunk(self._socket, ChunkType.STDIN_EOF)
+            if self._chunk_eof_type is not None:
+              NailgunProtocol.write_chunk(self._socket, self._chunk_eof_type)
             try:
               self._socket.shutdown(socket.SHUT_WR)  # Shutdown socket sends.
             except socket.error:  # Can happen if response is quick.

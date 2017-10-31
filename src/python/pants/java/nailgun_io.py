@@ -31,16 +31,16 @@ class NailgunStreamStdinReader(threading.Thread):
     """
     super(NailgunStreamStdinReader, self).__init__()
     self.daemon = True
-    self._out = None
+    self._write_handle = None
     self._socket = sock
 
   @contextmanager
   def running(self):
-    in_fd, out_fd = os.pipe()
-    self._out = os.fdopen(out_fd, 'w')
+    r_fd, w_fd = os.pipe()
+    self._write_handle = os.fdopen(w_fd, 'w')
     self.start()
     try:
-      yield os.fdopen(in_fd, 'r')
+      yield os.fdopen(r_fd, 'r')
     finally:
       self._try_close()
 
@@ -54,9 +54,9 @@ class NailgunStreamStdinReader(threading.Thread):
     for chunk_type, payload in NailgunProtocol.iter_chunks(self._socket, return_bytes=True):
       # TODO: Read chunks. Expecting only STDIN, STDIN_EOF, and maybe EXIT.
       if chunk_type == ChunkType.STDIN:
-        self._out.write(payload)
+        self._write_handle.write(payload)
       elif chunk_type == ChunkType.STDIN_EOF:
-        self._out.close()
+        self._write_handle.close()
       elif chunk_type == ChunkType.EXIT:
         break
       else:
@@ -125,40 +125,52 @@ class NailgunStreamStdinWriter(threading.Thread):
               self.stop()
 
 
-class NailgunStreamWriter(object):
+class NailgunStreamsWriter(object):
   """A sys.{stdout,stderr} replacement that writes output to a socket using the nailgun protocol."""
 
-  def __init__(self, sock, chunk_type, isatty=True, mask_broken_pipe=False):
+  def __init__(self, sock, chunk_type):
     """
     :param socket sock: A connected socket capable of speaking the nailgun protocol.
     :param str chunk_type: A ChunkType constant representing the nailgun protocol chunk type.
-    :param bool isatty: Whether or not the consumer of this stream has tty capabilities. (Optional)
-    :param bool mask_broken_pipe: This will toggle the masking of 'broken pipe' errors when writing
-                                  to the remote socket. This allows for completion of execution in
-                                  the event of a client disconnect (e.g. to support cleanup work).
     """
     self._socket = sock
     self._chunk_type = chunk_type
-    self._isatty = isatty
-    self._mask_broken_pipe = mask_broken_pipe
 
-  def write(self, payload):
+  @contextmanager
+  def running(self):
+    r_fd, w_fd = os.pipe()
+    self._read_handle = os.fdopen(r_fd, 'r')
+    self.start()
     try:
-      NailgunProtocol.write_chunk(self._socket, self._chunk_type, payload)
-    except IOError as e:
-      # If the remote client disconnects and we try to perform a write (e.g. socket.send/sendall),
-      # an 'error: [Errno 32] Broken pipe' exception can be thrown. Setting mask_broken_pipe=True
-      # safeguards against this case (which is unexpected for most writers of sys.stdout etc) so
-      # that we don't awkwardly interrupt the runtime by throwing this exception on writes to
-      # stdout/stderr.
-      if e.errno == errno.EPIPE and not self._mask_broken_pipe:
-        raise
+      yield os.fdopen(w_fd, 'w')
+    finally:
+      self._try_close()
 
-  def flush(self):
-    return
+  def _try_close(self):
+    try:
+      self._socket.close()
+    except:
+      pass
 
-  def isatty(self):
-    return self._isatty
+  def run(self):
+    while True:
+      readable, _, errored = select.select([self._stdin], [], [self._stdin], self._select_timeout)
 
-  def fileno(self):
-    return self._socket.fileno()
+      if self._stdin in errored:
+        self.stop()
+        return
+
+      if not self.is_stopped and self._stdin in readable:
+        data = os.read(self._stdin.fileno(), self._buf_size)
+
+        if not self.is_stopped:
+          if data:
+            NailgunProtocol.write_chunk(self._socket, ChunkType.STDIN, data)
+          else:
+            NailgunProtocol.write_chunk(self._socket, ChunkType.STDIN_EOF)
+            try:
+              self._socket.shutdown(socket.SHUT_WR)  # Shutdown socket sends.
+            except socket.error:  # Can happen if response is quick.
+              pass
+            finally:
+              self.stop()

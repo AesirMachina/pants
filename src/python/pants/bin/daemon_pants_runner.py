@@ -94,14 +94,14 @@ class DaemonPantsRunner(ProcessManager):
   def _nailgunned_stdio(self, sock):
     """Redirects stdio to the connected socket speaking the nailgun protocol."""
     # Determine output tty capabilities from the environment.
-    _, stdout_isatty, stderr_isatty = NailgunProtocol.isatty_from_env(self._env)
+    stdin_isatty, stdout_isatty, stderr_isatty = NailgunProtocol.isatty_from_env(self._env)
 
     # Launch a thread to read stdin data from the socket (the only messages expected from the client
     # for the remainder of the protocol), and threads to copy from stdout/stderr pipes onto the
     # socket.
-    with NailgunStreamStdinReader(sock).running() as stdin,\
-         NailgunStreamWriter.open(sock, ChunkType.STDOUT, None) as stdout,\
-         NailgunStreamWriter.open(sock, ChunkType.STDERR, None) as stderr:
+    with NailgunStreamStdinReader.open(sock, isatty=stdin_isatty) as stdin,\
+         NailgunStreamWriter.open(sock, ChunkType.STDOUT, None, isatty=stdout_isatty) as stdout,\
+         NailgunStreamWriter.open(sock, ChunkType.STDERR, None, isatty=stderr_isatty) as stderr:
       with stdio_as(stdout=stdout, stderr=stderr, stdin=stdin):
         yield
 

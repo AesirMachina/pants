@@ -26,7 +26,8 @@ class NailgunClientSession(NailgunProtocol):
   def __init__(self, sock, in_fd, out_fd, err_fd, exit_on_broken_pipe=False):
     self._sock = sock
     if in_fd:
-      self._input_reader = NailgunStreamWriter(in_fd, self._sock, ChunkType.STDIN, ChunkType.STDIN_EOF)
+      self._input_reader = NailgunStreamWriter(in_fd, self._sock,
+                                               ChunkType.STDIN, ChunkType.STDIN_EOF)
     else:
       self._input_reader = None
     self._stdout = out_fd

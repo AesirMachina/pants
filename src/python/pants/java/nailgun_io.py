@@ -16,6 +16,16 @@ from contextlib import contextmanager
 from pants.java.nailgun_protocol import ChunkType, NailgunProtocol
 
 
+@contextmanager
+def _pipe(isatty):
+  r_fd, w_fd = os.openpty() if isatty else os.pipe()
+  try:
+    yield os.fdopen(r_fd, 'r'), os.fdopen(w_fd, 'w')
+  finally:
+    os.close(r_fd)
+    os.close(w_fd)
+
+
 class NailgunStreamStdinReader(threading.Thread):
   """Reads Nailgun 'stdin' chunks on a socket and writes them to an output file-like.
 
@@ -25,24 +35,25 @@ class NailgunStreamStdinReader(threading.Thread):
   Runs until the socket is closed.
   """
 
-  def __init__(self, sock):
+  def __init__(self, sock, write_handle):
     """
     :param socket sock: the socket to read nailgun protocol chunks from.
     """
     super(NailgunStreamStdinReader, self).__init__()
     self.daemon = True
-    self._write_handle = None
     self._socket = sock
+    self._write_handle = write_handle
 
+  @classmethod
   @contextmanager
-  def running(self):
-    r_fd, w_fd = os.pipe()
-    self._write_handle = os.fdopen(w_fd, 'w')
-    self.start()
-    try:
-      yield os.fdopen(r_fd, 'r')
-    finally:
-      self._try_close()
+  def open(cls, sock, isatty=False):
+    with _pipe(isatty) as (read_handle, write_handle):
+      reader = NailgunStreamStdinReader(sock, write_handle)
+      reader.start()
+      try:
+        yield read_handle
+      finally:
+        reader._try_close()
 
   def _try_close(self):
     try:
@@ -106,16 +117,13 @@ class NailgunStreamWriter(threading.Thread):
 
   @classmethod
   @contextmanager
-  def open(cls, sock, chunk_type, chunk_eof_type, buf_size=None, select_timeout=None):
+  def open(cls, sock, chunk_type, chunk_eof_type, isatty=False, buf_size=None, select_timeout=None):
     """Yields the write side of a pipe that will copy appropriately chunked values to the socket."""
-    r_fd, w_fd = os.pipe()
-    read_handle = os.fdopen(r_fd, 'r')
-    write_handle = os.fdopen(w_fd, 'w')
-
-    writer = NailgunStreamWriter(read_handle, sock, chunk_type, chunk_eof_type,
-                                 buf_size=buf_size, select_timeout=select_timeout)
-    with writer.running():
-      yield write_handle
+    with _pipe(isatty) as (read_handle, write_handle):
+      writer = NailgunStreamWriter(read_handle, sock, chunk_type, chunk_eof_type,
+                                  buf_size=buf_size, select_timeout=select_timeout)
+      with writer.running():
+        yield write_handle
 
   @contextmanager
   def running(self):

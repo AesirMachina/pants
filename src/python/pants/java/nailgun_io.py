@@ -55,7 +55,9 @@ class NailgunStreamStdinReader(threading.Thread):
       # TODO: Read chunks. Expecting only STDIN and STDIN_EOF.
       if chunk_type == ChunkType.STDIN:
         self._write_handle.write(payload)
+        self._write_handle.flush()
       elif chunk_type == ChunkType.STDIN_EOF:
+        self._write_handle.flush()
         self._write_handle.close()
       else:
         self._try_close()

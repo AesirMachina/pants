@@ -5,7 +5,6 @@
 from __future__ import (absolute_import, division, generators, nested_scopes, print_function,
                         unicode_literals, with_statement)
 
-import errno
 import io
 import os
 import select
@@ -58,7 +57,7 @@ class NailgunStreamStdinReader(threading.Thread):
   def _try_close(self):
     try:
       self._socket.close()
-    except:
+    except Exception:
       pass
 
   def run(self):
